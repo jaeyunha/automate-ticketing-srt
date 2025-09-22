@@ -1,9 +1,12 @@
 import asyncio
+import sys
 from browser_use import Browser
 import os 
 import logging
+import platform
 from notification import send_notification
 from send_email import send_email
+from send_email_linux import send_email_with_mutt
 
 # Set up logging
 logging.basicConfig(
@@ -21,15 +24,21 @@ class TicketAutomationError(Exception):
     """Custom exception for ticket automation errors"""
     pass
 
+
 async def create_browser():
     """Create and start a browser instance with error handling"""
+    if platform.system() == "Darwin":
+        executable_path = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+        user_data_dir = '~/Library/Application Support/Google/Chrome'
+    else:
+        executable_path = '/opt/google/chrome/google-chrome'
+        user_data_dir = '~/.config/google-chrome'
     try:
         browser = Browser(
             record_video_dir="./recordings",
             cdp_url="http://localhost:9222",
-            executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-            user_data_dir='~/Library/Application Support/Google/Chrome',
-            profile_directory='Default',
+            executable_path=executable_path,
+            user_data_dir=user_data_dir,
             headless=False,
         )
         await browser.start()
@@ -99,7 +108,7 @@ async def run_ticket_search(date, departure_time, number_of_ticket):
         )
         
         # Wait a moment for the page to load
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         
         # Fill departure and destination cities with error handling
         await safe_page_operation(lambda: fill_cities(page))
@@ -261,7 +270,7 @@ async def continuous_ticket_search(page, date, departure_time):
             await safe_page_operation(lambda: click_search_button(page))
             
             # Wait for search results to load
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
             
             # Check for available tickets
             tickets_found = await safe_page_operation(lambda: check_for_tickets(page))
@@ -378,11 +387,24 @@ async def check_for_tickets(page):
 
 async def handle_ticket_found():
     """Handle notification when ticket is found"""
-    email_success = send_email(
-        to_email="jaeyunha0317@gmail.com",
-        subject="Ticket Found (SRT) - Buy within 10 minutes",
-        message="Hello from ticketing automation, buy within 10 minutes",
-    )
+    email_contents = {
+        "subject": "Ticket Found (SRT) - Buy within 10 minutes",
+        "message": "Hello from ticketing automation, buy within 10 minutes",
+        "recipient": "jaeyunha0317@gmail.com",
+    }
+    if platform.system() == "Darwin":
+
+        email_success = send_email(
+            to_email=email_contents["recipient"],
+            subject=email_contents["subject"],
+            message=email_contents["message"],
+        )
+    else:
+        email_success = send_email_with_mutt(
+            recipient=email_contents["recipient"],
+            subject=email_contents["subject"],
+            body=email_contents["message"],
+        )
     
     if email_success:
         logging.info("✓ Email sent successfully!")
@@ -409,7 +431,7 @@ async def refill_form_after_search(page, date, departure_time):
     # Re-select date and departure_time after refresh
     try:
         # Wait a bit more for the page to fully load
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         
         # Check if elements exist before trying to set values
         date_element_exists = await page.evaluate("() => document.getElementById('dptDt') !== null")
