@@ -2,70 +2,56 @@
 
 An automated ticket booking system for SRT (Super Rapid Train) that continuously searches for available tickets and notifies you when found.
 
-## Features
+## 🚀 Features
 
 - **Automated ticket searching** with continuous monitoring
-- **Email notifications** when tickets are found
+- **Email notifications** when tickets are found (via AppleScript)
 - **macOS notifications** with sound alerts
-- **Enhanced error handling** with automatic retry mechanisms
-- **Browser restart capability** for CDP connection issues
-- **Comprehensive logging** for debugging and monitoring
+- **iMessage notifications** (optional)
+- **Robust error handling** with automatic retry mechanisms
+- **Browser restart capability** for connection issues
+- **Comprehensive logging** for debugging
 
-## Recent Improvements (Error Handling & Auto-Retry)
+## 📋 Requirements
 
-The automation now includes robust error handling to prevent crashes and automatically recover from common issues:
+- **Python 3.12+**
+- **macOS** (for notifications and AppleScript)
+- **Chrome browser** with debugging enabled
+- **Mail app** configured (for email notifications)
+- **Messages app** (for iMessage notifications, optional)
 
-### 🔄 Automatic Retry Mechanisms
-- **CDP Error Recovery**: Automatically retries operations when Chrome DevTools Protocol errors occur
-- **Browser Restart**: Restarts the browser when connection issues persist
-- **Progressive Backoff**: Uses increasing delays between retry attempts
-- **Consecutive Error Tracking**: Restarts browser after too many consecutive errors
+## 🛠️ Installation
 
-### 🛡️ Error Handling Features
-- **Safe Page Operations**: All page interactions wrapped in retry logic
-- **Multiple Fallback Methods**: Each form field has multiple ways to be filled
-- **Graceful Degradation**: Continues operation even when some methods fail
-- **Detailed Logging**: Comprehensive logs for debugging issues
-
-### 📊 Monitoring & Logging
-- **File Logging**: All operations logged to `ticket_automation.log`
-- **Console Output**: Real-time status updates
-- **Error Tracking**: Detailed error messages with context
-- **Retry Attempts**: Clear indication of retry attempts and success/failure
-
-## Installation
-
-1. Install dependencies:
+1. **Install dependencies:**
 ```bash
-pip install browser-use
+pip install browser-use desktop-notifier macos-notifications
 ```
 
-2. Set up environment variables:
+2. **Set up Chrome debugging:**
 ```bash
-export GOOGLE_API_KEY="your_google_api_key"
+# Start Chrome with debugging enabled
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
 ```
 
-## Usage
+3. **Install terminal-notifier (for macOS notifications):**
+```bash
+brew install terminal-notifier
+```
+
+## 🎯 Usage
+
+### Quick Start
+```bash
+python run_automation.py
+```
 
 ### Basic Usage
 ```bash
 python main.py
 ```
 
-### Enhanced Usage (Recommended)
-```bash
-python run_automation.py
-```
-
-The enhanced runner provides:
-- Better error handling
-- Automatic retry on failures
-- Detailed logging
-- User-friendly status messages
-
-## Configuration
-
-Edit the parameters in `main.py` or `run_automation.py`:
+### Configuration
+Edit the parameters in `run_automation.py`:
 
 ```python
 await main(
@@ -76,73 +62,110 @@ await main(
 )
 ```
 
-## Error Recovery
+## 📁 Project Structure
 
-The system automatically handles these common issues:
+```
+automate-ticketing/
+├── main.py                 # Core automation logic
+├── run_automation.py       # Enhanced runner with better UX
+├── notification.py         # macOS notification system
+├── send_email.py          # Email notifications via AppleScript
+├── send_imessage.py       # iMessage notifications (optional)
+├── example_usage.py       # Usage examples
+├── email_recipients.json  # Email recipient configuration
+└── pyproject.toml         # Project dependencies
+```
 
-### CDP Errors
-- `No target with given id found`
-- `Node does not have a layout object`
-- `Node with given id does not belong to the document`
+## 🔧 How It Works
 
-### Browser Issues
-- Connection timeouts
-- Page load failures
-- Element interaction failures
+1. **Browser Automation**: Uses `browser-use` to control Chrome
+2. **Form Filling**: Automatically fills departure/destination, date, time, and ticket count
+3. **Continuous Search**: Repeatedly searches for available tickets
+4. **Ticket Detection**: Uses XPath to find "예약하기" (Reserve) buttons
+5. **Notifications**: Sends email and macOS notifications when tickets are found
+6. **Error Recovery**: Automatically retries on failures with exponential backoff
 
-### Recovery Actions
-1. **Immediate Retry**: Retry the operation with exponential backoff
-2. **Browser Restart**: Restart browser if retries fail
-3. **Full Restart**: Restart entire automation if browser restart fails
-4. **Notification**: Alert user if all recovery attempts fail
+## 📧 Notification System
 
-## Logging
+### Email Notifications
+- Uses AppleScript to send emails via Mail app
+- Configure recipients in `email_recipients.json`
+- Supports multiple recipients
+
+### macOS Notifications
+- Uses `terminal-notifier` for system notifications
+- Includes sound alerts
+- Shows ticket availability status
+
+### iMessage Notifications (Optional)
+- Uses AppleScript to send iMessages
+- Supports phone numbers and email addresses
+- Requires Messages app to be configured
+
+## 🛡️ Error Handling
+
+The system includes robust error handling:
+
+- **CDP Error Recovery**: Automatically retries Chrome DevTools Protocol errors
+- **Browser Restart**: Restarts browser when connection issues persist
+- **Progressive Backoff**: Uses increasing delays between retry attempts
+- **Multiple Fallback Methods**: Each form field has multiple ways to be filled
+- **Comprehensive Logging**: All operations logged to `ticket_automation.log`
+
+## 📊 Logging
 
 Logs are written to:
 - `ticket_automation.log` - Detailed operation logs
 - `automation_runner.log` - Runner-specific logs
-- Console output - Real-time status
+- Console output - Real-time status updates
 
-## Troubleshooting
+## 🚨 Troubleshooting
 
 ### Common Issues
 
-1. **CDP Connection Errors**
+1. **Chrome Debugging Not Enabled**
+   ```bash
+   # Start Chrome with debugging
+   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+   ```
+
+2. **Mail App Not Configured**
+   - Open Mail app and set up your email account
+   - Test email sending manually
+
+3. **Terminal Notifier Not Found**
+   ```bash
+   brew install terminal-notifier
+   ```
+
+4. **Browser Connection Issues**
    - The system will automatically retry and restart
    - Check Chrome is running with debugging enabled
    - Ensure port 9222 is available
 
-2. **Element Not Found**
-   - Multiple fallback methods are used
-   - Check if the website structure has changed
-   - Review logs for specific error details
+## 📝 Example Usage
 
-3. **Browser Crashes**
-   - Automatic browser restart is implemented
-   - Check system resources
-   - Review Chrome version compatibility
+```python
+# Test email notifications
+python send_email.py "recipient@example.com" "Test Subject" "Hello!"
 
-### Manual Recovery
+# Test macOS notifications
+python notification.py
 
-If the automation fails completely:
-1. Check the log files for error details
-2. Restart Chrome with debugging enabled
-3. Run the automation again
-4. The system will automatically retry failed operations
+# Test iMessage (requires Messages app)
+python send_imessage.py "+1234567890" "Hello from Python!"
+```
 
-## Files
+## 🔄 Automation Flow
 
-- `main.py` - Core automation logic with enhanced error handling
-- `run_automation.py` - Enhanced runner with better user experience
-- `notification.py` - macOS notification system
-- `send_email.py` - Email notification system
-- `ticket_automation.log` - Detailed operation logs
-- `automation_runner.log` - Runner logs
+1. **Start**: Launch Chrome with debugging enabled
+2. **Navigate**: Go to SRT booking website
+3. **Fill Form**: Enter departure (수서), destination (동대구), date, time, ticket count
+4. **Search**: Click search button
+5. **Check**: Look for "예약하기" buttons in results
+6. **Notify**: Send email and macOS notifications if tickets found
+7. **Repeat**: Continue searching until tickets are found or stopped
 
-## Requirements
+## 📄 License
 
-- Python 3.7+
-- Chrome browser with debugging enabled
-- macOS (for notifications)
-- Internet connection
-- Google API key (for LLM features, if used)
+MIT License - see LICENSE file for details.
