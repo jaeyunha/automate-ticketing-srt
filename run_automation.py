@@ -11,15 +11,17 @@ import asyncio
 import logging
 from main import main
 
-# Configure logging for the runner
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('automation_runner.log'),
-        logging.StreamHandler()
-    ]
-)
+# Configure logging (force override any existing config from imported libraries)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers.clear()
+formatter = logging.Formatter('%(asctime)s  %(levelname)-5s  %(message)s', datefmt='%H:%M:%S')
+file_handler = logging.FileHandler('ticket_automation.log')
+file_handler.setFormatter(formatter)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+root_logger.addHandler(file_handler)
+root_logger.addHandler(stream_handler)
 
 async def run_automation(args):
     """Run the ticket automation with enhanced error handling"""

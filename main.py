@@ -1,29 +1,34 @@
 import asyncio
 import subprocess
 import sys
+from dotenv import load_dotenv
+load_dotenv()
 from browser_use import Browser
 import os
 import logging
 import platform
 from notification import send_notification
-from send_email import send_email
-from send_email_linux import send_email_with_mutt
+from send_email_smtp import send_email_smtp
 
-# Set up logging
+# Set up logging (only applies if main.py is run directly, otherwise run_automation.py configures it)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('ticket_automation.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s  %(levelname)-5s  %(message)s',
+    datefmt='%H:%M:%S',
 )
 
-# Suppress noisy browser_use debug logs (DEBUG: Evaluating JavaScript: ...)
+# Suppress noisy browser_use debug logs
 for noisy_logger in ['browser_use', 'cdp_use', 'bubus', 'video_recorder', 'BrowserSession']:
     logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# Patch out raw print("DEBUG: Evaluating JavaScript: ...") in browser_use
+import builtins
+_original_print = builtins.print
+def _quiet_print(*args, **kwargs):
+    if args and isinstance(args[0], str) and args[0].startswith('DEBUG: Evaluating'):
+        return
+    _original_print(*args, **kwargs)
+builtins.print = _quiet_print
 
 class TicketAutomationError(Exception):
     """Custom exception for ticket automation errors"""
@@ -402,29 +407,32 @@ async def check_for_tickets(page, include_first_class=False):
 
 async def handle_ticket_found():
     """Handle notification when ticket is found"""
-    email_contents = {
-        "subject": "Ticket Found (SRT) - Buy within 10 minutes",
-        "message": "Hello from ticketing automation, buy within 10 minutes",
-        "recipient": "jaeyunha0317@gmail.com",
-    }
-    if platform.system() == "Darwin":
-
-        email_success = send_email(
-            to_email=email_contents["recipient"],
-            subject=email_contents["subject"],
-            message=email_contents["message"],
+    recipient = os.getenv("NOTIFY_EMAIL", "")
+    if recipient:
+        email_success = False
+        # Try SMTP first (cross-platform)
+        email_success = send_email_smtp(
+            to_email=recipient,
+            subject="Ticket Found (SRT) - Buy within 10 minutes",
+            message="Hello from ticketing automation, buy within 10 minutes",
         )
+        # Fallback to AppleScript on macOS
+        if not email_success and platform.system() == "Darwin":
+            try:
+                from send_email import send_email
+                email_success = send_email(
+                    to_email=recipient,
+                    subject="Ticket Found (SRT) - Buy within 10 minutes",
+                    message="Hello from ticketing automation, buy within 10 minutes",
+                )
+            except Exception:
+                pass
+        if email_success:
+            logging.info("✓ Email sent")
+        else:
+            logging.error("✗ Email failed")
     else:
-        email_success = send_email_with_mutt(
-            recipient=email_contents["recipient"],
-            subject=email_contents["subject"],
-            body=email_contents["message"],
-        )
-    
-    if email_success:
-        logging.info("✓ Email sent successfully!")
-    else:
-        logging.error("✗ Failed to send email")
+        logging.warning("NOTIFY_EMAIL not set — skipping email notification")
     
     send_notification(
         title="Ticket Found!",

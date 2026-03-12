@@ -9,7 +9,7 @@ An automated ticket booking system for SRT (Super Rapid Train) that continuously
 - **Continuous ticket monitoring** with configurable search parameters
 - **Multi-column ticket detection**: 일반실 (standard), 예약대기 (waitlist), and optionally 특실 (first class)
 - **Auto-login recovery**: Detects session expiry and re-authenticates automatically
-- **Multi-channel notifications**: Email (AppleScript), macOS desktop, Telegram (via openclaw)
+- **Multi-channel notifications**: Email (SMTP/AppleScript), desktop (macOS/Linux/Windows), Telegram (via openclaw)
 - **CLI flags** for all parameters — no code editing needed
 - **Robust error handling** with automatic browser restart and progressive backoff
 - **Background-friendly**: Runs without stealing window focus
@@ -17,21 +17,53 @@ An automated ticket booking system for SRT (Super Rapid Train) that continuously
 ## Requirements
 
 - **Python 3.12+**
-- **macOS** or **Linux**
+- **macOS**, **Linux**, or **Windows**
 - **Chrome browser** with remote debugging enabled
 - **uv** package manager
-- **terminal-notifier** (macOS, `brew install terminal-notifier`)
+- **terminal-notifier** (macOS only, `brew install terminal-notifier`)
 - **openclaw** (optional, for Telegram notifications)
 
 ## Installation
 
 ```bash
-# Clone and install dependencies
+# 1. Install dependencies
 uv sync
 
-# Start Chrome with debugging enabled
+# 2. Set up environment variables
+cp .env.example .env
+# Edit .env with your email and SMTP credentials
+
+# 3. Start Chrome in debugging mode (see platform-specific instructions below)
+```
+
+### Starting Chrome in Debug Mode
+
+You must start Chrome with the remote debugging port **before** running the automation.
+**Close all existing Chrome windows first**, then run:
+
+**macOS:**
+```bash
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
 ```
+
+**Linux:**
+```bash
+google-chrome --remote-debugging-port=9222
+# or
+/opt/google/chrome/google-chrome --remote-debugging-port=9222
+```
+
+**Windows (CMD):**
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+**Windows (PowerShell):**
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+> Once Chrome is open, log into the SRT site (https://etk.srail.kr). The automation will use your saved session.
 
 ## Usage
 
@@ -107,11 +139,13 @@ The automation detects three page states:
 
 When a ticket is found, all three fire simultaneously:
 
-| Channel | Method | Details |
-|---------|--------|---------|
-| Email | AppleScript (macOS) / mutt (Linux) | "Ticket Found - Buy within 10 minutes" |
-| Desktop | terminal-notifier | Sound alert (Frog) |
-| Telegram | openclaw | Via `@walter_jaeyun_bot` |
+| Channel | Method | Platform |
+|---------|--------|----------|
+| Email | SMTP (default) → AppleScript (macOS fallback) | All |
+| Desktop | terminal-notifier (macOS) / desktop-notifier (Linux/Windows) | All |
+| Telegram | openclaw (optional) | All |
+
+Email settings are managed in the `.env` file. See `.env.example` for reference.
 
 ## Project Structure
 
@@ -119,11 +153,11 @@ When a ticket is found, all three fire simultaneously:
 automate-ticketing-srt/
 ├── main.py                 # Core automation logic
 ├── run_automation.py       # CLI entry point
-├── notification.py         # macOS desktop notifications
-├── send_email.py           # Email via AppleScript (macOS)
-├── send_email_linux.py     # Email via mutt (Linux)
-├── send_imessage.py        # iMessage notifications
-├── email_recipients.json   # Recipient configuration
+├── notification.py         # Desktop notifications (cross-platform)
+├── send_email_smtp.py      # Email via SMTP (cross-platform)
+├── send_email.py           # Email via AppleScript (macOS fallback)
+├── send_imessage.py        # iMessage notifications (macOS only)
+├── .env.example            # Environment variable template
 └── pyproject.toml          # Dependencies
 ```
 
@@ -131,16 +165,14 @@ automate-ticketing-srt/
 
 - **Console**: Clean, minimal — status every 10 attempts, errors, and ticket found events
 - **ticket_automation.log**: Detailed operation log
-- **automation_runner.log**: Runner-level log
 
 Browser library debug output is suppressed for clean console output.
 
 ## Troubleshooting
 
-**Chrome debugging not enabled**
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-```
+**Chrome debugging connection fails**
+- Close all Chrome windows and relaunch with `--remote-debugging-port=9222`
+- Check if port 9222 is in use: `lsof -i :9222` (macOS/Linux) or `netstat -ano | findstr 9222` (Windows)
 
 **Session keeps expiring**
 - Make sure you're logged into the SRT site in Chrome before starting
@@ -149,7 +181,11 @@ Browser library debug output is suppressed for clean console output.
 **Browser steals focus**
 - Already handled: Chrome launches with `--no-focus-on-navigate` flag
 
-**terminal-notifier not found**
+**Emails not arriving**
+- Check `.env` file has `NOTIFY_EMAIL`, `SMTP_EMAIL`, `SMTP_PASSWORD` set
+- For Gmail, you need an app password: https://myaccount.google.com/apppasswords
+
+**terminal-notifier not found (macOS)**
 ```bash
 brew install terminal-notifier
 ```
