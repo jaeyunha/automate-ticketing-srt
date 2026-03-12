@@ -1,7 +1,8 @@
 import asyncio
+import subprocess
 import sys
 from browser_use import Browser
-import os 
+import os
 import logging
 import platform
 from notification import send_notification
@@ -17,6 +18,10 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+# Suppress noisy browser_use debug logs (DEBUG: Evaluating JavaScript: ...)
+for noisy_logger in ['browser_use', 'cdp_use', 'bubus', 'video_recorder', 'BrowserSession']:
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
@@ -40,6 +45,11 @@ async def create_browser():
             executable_path=executable_path,
             user_data_dir=user_data_dir,
             headless=False,
+            highlight_elements=False,
+            args=[
+                "--no-focus-on-navigate",
+                "--disable-background-timer-throttling",
+            ],
         )
         await browser.start()
         return browser
@@ -62,14 +72,14 @@ async def safe_page_operation(operation, max_retries=3, delay=2):
             raise e
     raise TicketAutomationError(f"Operation failed after {max_retries} attempts")
 
-async def main(date, departure_time, number_of_ticket, max_restarts=5):
+async def main(date, departure_time, number_of_ticket, departure="동대구", arrival="수서", include_first_class=False, max_restarts=5):
     """Main function with automatic restart capability"""
     restart_count = 0
-    
+
     while restart_count < max_restarts:
         try:
             logging.info(f"Starting ticket automation (attempt {restart_count + 1}/{max_restarts})")
-            await run_ticket_search(date, departure_time, number_of_ticket)
+            await run_ticket_search(date, departure_time, number_of_ticket, departure, arrival, include_first_class)
             break  # Success, exit the retry loop
             
         except TicketAutomationError as e:
@@ -96,7 +106,7 @@ async def main(date, departure_time, number_of_ticket, max_restarts=5):
             else:
                 raise
 
-async def run_ticket_search(date, departure_time, number_of_ticket):
+async def run_ticket_search(date, departure_time, number_of_ticket, departure, arrival, include_first_class):
     """Core ticket search logic with error handling"""
     browser = None
     try:
@@ -106,18 +116,18 @@ async def run_ticket_search(date, departure_time, number_of_ticket):
         page = await safe_page_operation(
             lambda: browser.new_page("https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000")
         )
-        
+
         # Wait a moment for the page to load
         await asyncio.sleep(3)
-        
+
         # Fill departure and destination cities with error handling
-        await safe_page_operation(lambda: fill_cities(page))
-        
+        await safe_page_operation(lambda: fill_cities(page, departure, arrival))
+
         # Fill form fields with error handling
         await safe_page_operation(lambda: fill_form_fields(page, date, departure_time, number_of_ticket))
-        
+
         # Start the continuous ticket checking loop
-        await continuous_ticket_search(page, date, departure_time)
+        await continuous_ticket_search(page, date, departure_time, number_of_ticket, departure, arrival, include_first_class)
         
     except Exception as e:
         logging.error(f"Error in ticket search: {e}")
@@ -129,171 +139,175 @@ async def run_ticket_search(date, departure_time, number_of_ticket):
             except Exception as e:
                 logging.warning(f"Error stopping browser: {e}")
 
-async def fill_cities(page):
+async def fill_cities(page, departure, arrival):
     """Fill departure and destination cities"""
     departure_city = await page.get_elements_by_css_selector("#dptRsStnCdNm")
     destination_city = await page.get_elements_by_css_selector("#arvRsStnCdNm")
-    
+
     # Check if elements were found
     if departure_city and destination_city:
-        await departure_city[0].fill("수서", clear_existing=True)
-        await destination_city[0].fill("동대구", clear_existing=True)
-        logging.info("Successfully filled departure and destination cities")
+        await departure_city[0].fill(departure, clear_existing=True)
+        await destination_city[0].fill(arrival, clear_existing=True)
     else:
-        logging.warning("Could not find departure or destination city elements")
         raise TicketAutomationError("City elements not found")
 
 async def fill_form_fields(page, date, departure_time, number_of_ticket):
     """Fill all form fields with error handling"""
-    # Handle date dropdown
     await safe_page_operation(lambda: fill_date_field(page, date))
-    
-    # Handle departure time dropdown
     await safe_page_operation(lambda: fill_time_field(page, departure_time))
-    
-    # Handle number of tickets dropdown
     await safe_page_operation(lambda: fill_ticket_count_field(page, number_of_ticket))
+    logging.info(f"Form filled: date={date}, time={departure_time}, tickets={number_of_ticket}")
+
+async def _set_select_value(page, element_id, value, label):
+    """Set a select dropdown value using JS with select_option fallback"""
+    try:
+        await page.evaluate(f"""
+            () => {{
+                const select = document.getElementById('{element_id}');
+                if (!select) return;
+                select.value = '{value}';
+                const options = select.querySelectorAll('option');
+                options.forEach(option => option.removeAttribute('selected'));
+                const target = select.querySelector('option[value="{value}"]');
+                if (target) target.setAttribute('selected', 'selected');
+            }}
+        """)
+    except Exception as e:
+        logging.warning(f"JS set failed for {label}, trying fallback: {e}")
+        try:
+            el = await page.get_elements_by_css_selector(f"#{element_id}")
+            if el:
+                await el[0].select_option(value)
+        except Exception as e2:
+            raise TicketAutomationError(f"{label} selection failed: {e2}")
 
 async def fill_date_field(page, date):
-    """Fill date field with multiple fallback methods"""
-    try:
-        # Method 1: Use JavaScript to directly set the value (most reliable)
-        await page.evaluate("() => { document.getElementById('dptDt').value = '" + date + "'; }")
-        logging.info("Successfully selected date using JavaScript")
-        
-        # Method 2: Alternative - remove selected from all options, then add to target option
-        await page.evaluate(f"""
-            () => {{
-                const select = document.getElementById('dptDt');
-                const options = select.querySelectorAll('option');
-                options.forEach(option => option.removeAttribute('selected'));
-                const targetOption = select.querySelector('option[value="{date}"]');
-                if (targetOption) {{
-                    targetOption.setAttribute('selected', 'selected');
-                    select.value = '{date}';
-                }}
-            }}
-        """)
-        logging.info("Successfully selected date by modifying HTML attributes")
-        
-    except Exception as e:
-        logging.warning(f"Direct HTML modification failed: {e}")
-        # Fallback to the original select_option method
-        try:
-            date_element = await page.get_elements_by_css_selector("#dptDt")
-            if date_element:
-                await date_element[0].select_option(date)
-                logging.info("Successfully selected date using select_option fallback")
-        except Exception as e2:
-            logging.error(f"All date selection methods failed: {e2}")
-            raise TicketAutomationError("Date selection failed")
+    await _set_select_value(page, 'dptDt', date, 'Date')
 
 async def fill_time_field(page, departure_time):
-    """Fill departure time field with multiple fallback methods"""
-    try:
-        # Method 1: Use JavaScript to directly set the value (most reliable)
-        await page.evaluate(f"() => {{ document.getElementById('dptTm').value = '{departure_time}'; }}")
-        logging.info("Successfully selected departure time using JavaScript")
-        
-        # Method 2: Alternative - remove selected from all options, then add to target option
-        await page.evaluate(f"""
-            () => {{
-                const select = document.getElementById('dptTm');
-                const options = select.querySelectorAll('option');
-                options.forEach(option => option.removeAttribute('selected'));
-                const targetOption = select.querySelector('option[value="{departure_time}"]');
-                if (targetOption) {{
-                    targetOption.setAttribute('selected', 'selected');
-                    select.value = '{departure_time}';
-                }}
-            }}
-        """)
-        logging.info("Successfully selected departure time by modifying HTML attributes")
-        
-    except Exception as e:
-        logging.warning(f"Direct HTML modification for departure_time failed: {e}")
-        # Fallback to the original select_option method
-        try:
-            departure_time_element = await page.get_elements_by_css_selector("#dptTm")
-            if departure_time_element:
-                await departure_time_element[0].select_option(departure_time)
-                logging.info("Successfully selected departure time using select_option fallback")
-        except Exception as e2:
-            logging.error(f"All departure_time selection methods failed: {e2}")
-            raise TicketAutomationError("Time selection failed")
+    await _set_select_value(page, 'dptTm', departure_time, 'Time')
 
 async def fill_ticket_count_field(page, number_of_ticket):
-    """Fill ticket count field with multiple fallback methods"""
-    try:
-        # Method 1: Use JavaScript to directly set the value (most reliable)
-        await page.evaluate(f"() => {{ document.getElementById('psgInfoPerPrnb1').value = '{number_of_ticket}'; }}")
-        logging.info("Successfully selected number of tickets using JavaScript")
-        
-        # Method 2: Alternative - remove selected from all options, then add to target option
-        await page.evaluate(f"""
-            () => {{
-                const select = document.getElementById('psgInfoPerPrnb1');
-                const options = select.querySelectorAll('option');
-                options.forEach(option => option.removeAttribute('selected'));
-                const targetOption = select.querySelector('option[value="{number_of_ticket}"]');
-                if (targetOption) {{
-                    targetOption.setAttribute('selected', 'selected');
-                    select.value = '{number_of_ticket}';
-                }}
-            }}
-        """)
-        logging.info("Successfully selected number of tickets by modifying HTML attributes")
-        
-    except Exception as e:
-        logging.warning(f"Direct HTML modification for ticket count failed: {e}")
-        # Fallback to the original select_option method
-        try:
-            number_of_ticket_selected = await page.get_elements_by_css_selector("#psgInfoPerPrnb1")
-            if number_of_ticket_selected:
-                await number_of_ticket_selected[0].select_option(number_of_ticket)
-                logging.info("Successfully selected number of tickets using select_option fallback")
-        except Exception as e2:
-            logging.error(f"All ticket count selection methods failed: {e2}")
-            raise TicketAutomationError("Ticket count selection failed")
+    await _set_select_value(page, 'psgInfoPerPrnb1', number_of_ticket, 'Ticket count')
 
-async def continuous_ticket_search(page, date, departure_time):
+async def handle_session_expiry(page, date, departure_time, number_of_ticket, departure, arrival):
+    """Detect if session expired and auto-login if needed. Returns True if re-login happened."""
+    page_state = await page.evaluate("""
+        () => {
+            const url = window.location.href;
+            // Explicitly on the login page
+            if (url.includes('login') || url.includes('Login')) return 'login';
+            if (document.querySelector('.loginSubmit')) return 'login';
+
+            // On the search page — check if actually logged in
+            // Look for logout link/button or "로그아웃" text which only appears when logged in
+            const logoutLink = document.querySelector('a[href*="logout"], a[href*="Logout"]');
+            const memberInfo = document.querySelector('.login_info, .member_info, .gnb_login .login_after');
+            const bodyText = document.body ? document.body.innerText : '';
+            const hasLogoutText = bodyText.includes('로그아웃');
+            const hasLoginText = bodyText.includes('로그인') && !hasLogoutText;
+            const isLoggedIn = !!(logoutLink || memberInfo || hasLogoutText);
+
+            if (document.getElementById('dptDt') !== null) {
+                return isLoggedIn ? 'search_logged_in' : 'search_not_logged_in';
+            }
+            return 'unknown';
+        }
+    """)
+
+    if page_state == 'search_logged_in':
+        return False
+
+    if page_state == 'search_not_logged_in':
+        logging.warning("Not logged in — navigating to login page")
+        await page.evaluate("""
+            () => { window.location.href = 'https://etk.srail.kr/cmc/01/selectLoginForm.do?pageId=TK0701000000'; }
+        """)
+        await asyncio.sleep(3)
+        # Fall through to login handling below
+
+    # Re-check if we're now on the login page
+    on_login_page = await page.evaluate("() => !!document.querySelector('.loginSubmit')")
+    if page_state == 'login' or on_login_page:
+        logging.warning("Session expired — auto-login triggered")
+
+        # Click the login submit button (credentials are auto-filled by Chrome)
+        login_btn = await page.get_elements_by_css_selector("input.loginSubmit")
+        if login_btn:
+            await login_btn[0].click()
+            logging.info("Clicked login button, waiting for redirect...")
+            await asyncio.sleep(5)
+
+            # Navigate back to the search page
+            await page.evaluate("""
+                () => { window.location.href = 'https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000'; }
+            """)
+            await asyncio.sleep(3)
+
+            # Re-fill the form
+            await fill_cities(page, departure, arrival)
+            await fill_form_fields(page, date, departure_time, number_of_ticket)
+            logging.info("Re-login complete, form re-filled")
+            return True
+        else:
+            logging.error("On login page but could not find login button")
+            send_notification(
+                title="Login Required",
+                message="Auto-login failed. Please log in manually.",
+                sound="Basso"
+            )
+            raise TicketAutomationError("Auto-login failed — login button not found")
+
+    # Unknown page — try navigating back to search
+    logging.warning(f"On unexpected page (state={page_state}), navigating back to search")
+    await page.evaluate("""
+        () => { window.location.href = 'https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000'; }
+    """)
+    await asyncio.sleep(3)
+    await fill_cities(page, departure, arrival)
+    await fill_form_fields(page, date, departure_time, number_of_ticket)
+    return True
+
+
+async def continuous_ticket_search(page, date, departure_time, number_of_ticket, departure, arrival, include_first_class):
     """Continuous ticket checking loop with error handling"""
     attempt = 1
     consecutive_errors = 0
     max_consecutive_errors = 5
-    
+
     while True:
         try:
-            logging.info(f"=== Ticket Search Attempt #{attempt} ===")
-            
-            # Handle search button with error handling
+            # Check if we're still on the right page / session is alive
+            re_logged_in = await handle_session_expiry(
+                page, date, departure_time, number_of_ticket, departure, arrival
+            )
+            if re_logged_in:
+                logging.info("Session restored, resuming search")
+
             await safe_page_operation(lambda: click_search_button(page))
-            
-            # Wait for search results to load
             await asyncio.sleep(3)
-            
-            # Check for available tickets
-            tickets_found = await safe_page_operation(lambda: check_for_tickets(page))
-            
+
+            tickets_found = await safe_page_operation(lambda: check_for_tickets(page, include_first_class))
+
             if tickets_found:
-                logging.info("🎉 TICKET FOUND! Exiting search loop")
                 break
-            
-            # Re-fill the form after refresh
-            await safe_page_operation(lambda: refill_form_after_search(page, date, departure_time))
-            
+
+            await safe_page_operation(lambda: refill_form_after_search(page, date, departure_time, departure, arrival))
+
+            # Log every 10 attempts to avoid spam
+            if attempt % 10 == 0:
+                logging.info(f"Search attempt #{attempt} — no tickets yet")
+
             attempt += 1
-            consecutive_errors = 0  # Reset error counter on successful iteration
-            
+            consecutive_errors = 0
+
         except Exception as e:
             consecutive_errors += 1
-            logging.error(f"Error in ticket search attempt {attempt}: {e}")
-            
+            logging.error(f"Attempt #{attempt} error ({consecutive_errors}/5): {e}")
+
             if consecutive_errors >= max_consecutive_errors:
-                logging.error(f"Too many consecutive errors ({consecutive_errors}). Restarting browser.")
                 raise TicketAutomationError(f"Too many consecutive errors: {consecutive_errors}")
-            
-            # Wait before retrying
+
             await asyncio.sleep(5)
             attempt += 1
 
@@ -302,87 +316,88 @@ async def click_search_button(page):
     search_button = await page.get_elements_by_css_selector("input[type='submit']")
     if search_button:
         await search_button[0].click()
-        logging.info("Successfully clicked search button")
     else:
-        logging.error("Could not find search button")
         raise TicketAutomationError("Search button not found")
 
-async def check_for_tickets(page):
-    """Check for available tickets and handle ticket booking"""
+async def check_for_tickets(page, include_first_class=False):
+    """Check for available tickets and handle ticket booking.
+
+    Checks these columns:
+      - td[7]: 일반실 (always)
+      - td[8]: 예약대기 (always)
+      - td[6]: 특실 (only if include_first_class is True)
+    """
+    # Build list of columns to check: [column_index, label]
+    columns_js = "[7, 8"
+    if include_first_class:
+        columns_js += ", 6"
+    columns_js += "]"
+
+    column_labels = {6: "특실", 7: "일반실", 8: "예약대기"}
+
     try:
-        # Method 1: Use XPath to find all reservation links in the 7th column
-        reservation_found = await page.evaluate("""
-            () => {
-                // Find all reservation links in the 7th column of any row
-                const xpath = "//*[@id='result-form']//tbody//tr//td[7]/a";
-                const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-                
+        reservation_found = await page.evaluate(f"""
+            () => {{
+                const columns = {columns_js};
                 const availableLinks = [];
-                // Check if any links contain "예약하기" text
-                for (let i = 0; i < result.snapshotLength; i++) {
-                    const link = result.snapshotItem(i);
-                    if (link && link.textContent && link.textContent.includes('예약하기')) {
-                        availableLinks.push({
-                            text: link.textContent,
-                            href: link.href
-                        });
-                    }
-                }
+                for (const col of columns) {{
+                    const xpath = "//*[@id='result-form']//tbody//tr//td[" + col + "]/a";
+                    const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                    for (let i = 0; i < result.snapshotLength; i++) {{
+                        const link = result.snapshotItem(i);
+                        if (link && link.textContent && link.textContent.includes('예약하기')) {{
+                            availableLinks.push({{
+                                text: link.textContent.trim(),
+                                ariaLabel: link.getAttribute('aria-label') || '',
+                                col: col
+                            }});
+                        }}
+                    }}
+                }}
                 return availableLinks;
-            }
+            }}
         """)
-        
-        # Parse the result properly
+
         import json
         try:
             if isinstance(reservation_found, str):
                 reservation_found = json.loads(reservation_found)
-            logging.info(f"Found {len(reservation_found)} available tickets")
-            
+
             if len(reservation_found) > 0:
-                logging.info("Available tickets:")
-                for i, ticket in enumerate(reservation_found):
-                    logging.info(f"  Ticket {i+1}: {ticket['text']}")
-                
-                # Click the first available ticket
-                click_result = await page.evaluate("""
-                    () => {
-                        const xpath = "//*[@id='result-form']//tbody//tr//td[7]/a";
-                        const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-                        
-                        const availableLinks = [];
-                        for (let i = 0; i < result.snapshotLength; i++) {
-                            const link = result.snapshotItem(i);
-                            if (link && link.textContent && link.textContent.includes('예약하기')) {
-                                availableLinks.push(link);
-                            }
-                        }
-                        
-                        if (availableLinks.length > 0) {
-                            // Select the first available ticket
-                            availableLinks[0].click();
-                            return true;
-                        }
-                        return false;
-                    }
+
+                # Click the first available ticket (priority: 일반실 > 예약대기 > 특실)
+                click_result = await page.evaluate(f"""
+                    () => {{
+                        const columns = {columns_js};
+                        for (const col of columns) {{
+                            const xpath = "//*[@id='result-form']//tbody//tr//td[" + col + "]/a";
+                            const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                            for (let i = 0; i < result.snapshotLength; i++) {{
+                                const link = result.snapshotItem(i);
+                                if (link && link.textContent && link.textContent.includes('예약하기')) {{
+                                    link.click();
+                                    return {{clicked: true, col: col}};
+                                }}
+                            }}
+                        }}
+                        return {{clicked: false}};
+                    }}
                 """)
-                
-                if click_result:
-                    logging.info("🎉 TICKET FOUND! Successfully clicked reservation button")
+
+                if isinstance(click_result, str):
+                    click_result = json.loads(click_result)
+
+                if click_result.get('clicked'):
+                    col_label = column_labels.get(click_result.get('col'), 'unknown')
+                    logging.info(f"🎉 TICKET FOUND! Clicked [{col_label}]")
                     await handle_ticket_found()
                     return True
-                else:
-                    logging.warning("Failed to click reservation button")
-            else:
-                logging.info("No tickets available yet")
         except Exception as parse_error:
-            logging.error(f"Error parsing reservation results: {parse_error}")
-            logging.info("No tickets available yet")
-            
+            logging.error(f"Error parsing results: {parse_error}")
+
     except Exception as e:
-        logging.error(f"XPath method failed: {e}")
-        logging.info("No tickets available yet (XPath method failed)")
-    
+        logging.error(f"Ticket check failed: {e}")
+
     return False
 
 async def handle_ticket_found():
@@ -417,42 +432,50 @@ async def handle_ticket_found():
         sound="Frog"
     )
 
-async def refill_form_after_search(page, date, departure_time):
+    # Send Telegram notification via openclaw (fire-and-forget, don't block booking)
+    try:
+        subprocess.Popen(
+            [
+                "openclaw", "tui",
+                "--session", "srt-ticket",
+                "--message", "Send a Telegram message to Jaeyun saying: ✅ We got the SRT train ticket. Buy within 10 minutes!"
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logging.info("✓ Telegram notification dispatched via openclaw")
+    except Exception as e:
+        logging.error(f"✗ Failed to send Telegram notification: {e}")
+
+async def refill_form_after_search(page, date, departure_time, departure, arrival):
     """Re-fill the form after search results"""
+    # Quick check: are we still on the search page?
+    on_search_page = await page.evaluate("() => document.getElementById('dptRsStnCdNm') !== null")
+    if not on_search_page:
+        logging.warning("Not on search page during refill — session may have expired")
+        raise TicketAutomationError("Not on search page during refill")
+
     # Re-fill departure and destination cities
     departure_city = await page.get_elements_by_css_selector("#dptRsStnCdNm")
     destination_city = await page.get_elements_by_css_selector("#arvRsStnCdNm")
-    
-    if departure_city and destination_city:
-        await departure_city[0].fill("수서", clear_existing=True)
-        await destination_city[0].fill("동대구", clear_existing=True)
-        logging.info("Re-filled departure and destination cities")
 
+    if departure_city and destination_city:
+        await departure_city[0].fill(departure, clear_existing=True)
+        await destination_city[0].fill(arrival, clear_existing=True)
     # Re-select date and departure_time after refresh
     try:
-        # Wait a bit more for the page to fully load
-        await asyncio.sleep(3)
-        
-        # Check if elements exist before trying to set values
-        date_element_exists = await page.evaluate("() => document.getElementById('dptDt') !== null")
-        departure_time_element_exists = await page.evaluate("() => document.getElementById('dptTm') !== null")
-        
-        if date_element_exists:
-            await page.evaluate(f"() => {{ document.getElementById('dptDt').value = '{date}'; }}")
-            logging.info("Re-selected date")
-        else:
-            logging.warning("Date element not found after refresh")
-            
-        if departure_time_element_exists:
-            await page.evaluate(f"() => {{ document.getElementById('dptTm').value = '{departure_time}'; }}")
-            logging.info("Re-selected departure_time")
-        else:
-            logging.warning("Time element not found after refresh")
-            
+        await page.evaluate(f"""
+            () => {{
+                const dptDt = document.getElementById('dptDt');
+                const dptTm = document.getElementById('dptTm');
+                if (dptDt) dptDt.value = '{date}';
+                if (dptTm) dptTm.value = '{departure_time}';
+            }}
+        """)
     except Exception as e:
-        logging.error(f"Failed to re-select date/departure_time: {e}")
+        logging.error(f"Form refill failed: {e}")
         raise TicketAutomationError("Form refill failed")
 
 if __name__ == "__main__":
-    asyncio.run(main(date="20251003", departure_time="200000", number_of_ticket="2"))
+    asyncio.run(main(date="20251003", departure_time="200000", number_of_ticket="2", departure="동대구", arrival="수서"))
     # asyncio.run(handle_ticket_found())

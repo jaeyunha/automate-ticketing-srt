@@ -1,171 +1,157 @@
 # SRT Ticket Automation
 
-An automated ticket booking system for SRT (Super Rapid Train) that continuously searches for available tickets and notifies you when found.
+An automated ticket booking system for SRT (Super Rapid Train) that continuously searches for available tickets, auto-reserves the first one found, and notifies you via email, desktop, and Telegram.
 
-## 🚀 Features
+## Features
 
-- **Automated ticket searching** with continuous monitoring
-- **Email notifications** when tickets are found (via AppleScript)
-- **macOS notifications** with sound alerts
-- **iMessage notifications** (optional)
-- **Robust error handling** with automatic retry mechanisms
-- **Browser restart capability** for connection issues
-- **Comprehensive logging** for debugging
+- **Continuous ticket monitoring** with configurable search parameters
+- **Multi-column ticket detection**: 일반실 (standard), 예약대기 (waitlist), and optionally 특실 (first class)
+- **Auto-login recovery**: Detects session expiry and re-authenticates automatically
+- **Multi-channel notifications**: Email (AppleScript), macOS desktop, Telegram (via openclaw)
+- **CLI flags** for all parameters — no code editing needed
+- **Robust error handling** with automatic browser restart and progressive backoff
+- **Background-friendly**: Runs without stealing window focus
 
-## 📋 Requirements
+## Requirements
 
 - **Python 3.12+**
-- **macOS** (for notifications and AppleScript)
-- **Chrome browser** with debugging enabled
-- **Mail app** configured (for email notifications)
-- **Messages app** (for iMessage notifications, optional)
+- **macOS** or **Linux**
+- **Chrome browser** with remote debugging enabled
+- **uv** package manager
+- **terminal-notifier** (macOS, `brew install terminal-notifier`)
+- **openclaw** (optional, for Telegram notifications)
 
-## 🛠️ Installation
+## Installation
 
-1. **Install dependencies:**
 ```bash
-pip install browser-use desktop-notifier macos-notifications
-```
+# Clone and install dependencies
+uv sync
 
-2. **Set up Chrome debugging:**
-```bash
 # Start Chrome with debugging enabled
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
 ```
 
-3. **Install terminal-notifier (for macOS notifications):**
+## Usage
+
+### Quick Start (defaults: 동대구 → 수서)
+
+```bash
+uv run run_automation.py
+```
+
+### With Custom Parameters
+
+```bash
+uv run run_automation.py \
+  --departure 동대구 \
+  --arrival 수서 \
+  --date 20260314 \
+  --time 080000 \
+  --tickets 2
+```
+
+### Include First Class Seats
+
+```bash
+uv run run_automation.py --first-class
+```
+
+### All Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--departure` | 동대구 | Departure station |
+| `--arrival` | 수서 | Arrival station |
+| `--date` | 20260314 | Travel date (YYYYMMDD) |
+| `--time` | 080000 | Departure time (HHMMSS) |
+| `--tickets` | 2 | Number of tickets |
+| `--first-class` | off | Also check 특실 (first class) |
+| `--max-restarts` | 5 | Max browser restart attempts |
+
+## How It Works
+
+```
+run_automation.py (CLI)
+  └─ main() — outer retry loop (up to 5 restarts)
+      └─ run_ticket_search()
+          ├─ Launch browser via CDP (localhost:9222)
+          ├─ Navigate to SRT booking page
+          ├─ Fill form (departure, arrival, date, time, tickets)
+          └─ continuous_ticket_search() — polling loop
+              ├─ Check session health (auto re-login if expired)
+              ├─ Click search button
+              ├─ Check results: 일반실 → 예약대기 → 특실
+              │   ├─ Found → click 예약하기, notify, exit
+              │   └─ Not found → refill form, repeat
+              └─ On 5 consecutive errors → restart browser
+```
+
+### Ticket Detection Priority
+
+1. **일반실** (standard, td[7]) — always checked
+2. **예약대기** (waitlist, td[8]) — always checked
+3. **특실** (first class, td[6]) — only with `--first-class`
+
+Clicks the first `예약하기` link found in priority order.
+
+### Session Recovery
+
+The automation detects three page states:
+- **Logged in on search page** → continue normally
+- **Not logged in** → navigate to login page, click 로그인 (Chrome has saved credentials), return to search
+- **Unknown page** → navigate back to search page and refill form
+
+## Notifications
+
+When a ticket is found, all three fire simultaneously:
+
+| Channel | Method | Details |
+|---------|--------|---------|
+| Email | AppleScript (macOS) / mutt (Linux) | "Ticket Found - Buy within 10 minutes" |
+| Desktop | terminal-notifier | Sound alert (Frog) |
+| Telegram | openclaw | Via `@walter_jaeyun_bot` |
+
+## Project Structure
+
+```
+automate-ticketing-srt/
+├── main.py                 # Core automation logic
+├── run_automation.py       # CLI entry point
+├── notification.py         # macOS desktop notifications
+├── send_email.py           # Email via AppleScript (macOS)
+├── send_email_linux.py     # Email via mutt (Linux)
+├── send_imessage.py        # iMessage notifications
+├── email_recipients.json   # Recipient configuration
+└── pyproject.toml          # Dependencies
+```
+
+## Logging
+
+- **Console**: Clean, minimal — status every 10 attempts, errors, and ticket found events
+- **ticket_automation.log**: Detailed operation log
+- **automation_runner.log**: Runner-level log
+
+Browser library debug output is suppressed for clean console output.
+
+## Troubleshooting
+
+**Chrome debugging not enabled**
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+```
+
+**Session keeps expiring**
+- Make sure you're logged into the SRT site in Chrome before starting
+- The automation will auto re-login using Chrome's saved credentials
+
+**Browser steals focus**
+- Already handled: Chrome launches with `--no-focus-on-navigate` flag
+
+**terminal-notifier not found**
 ```bash
 brew install terminal-notifier
 ```
 
-## 🎯 Usage
+## License
 
-### Quick Start
-```bash
-python run_automation.py
-```
-
-### Basic Usage
-```bash
-python main.py
-```
-
-### Configuration
-Edit the parameters in `run_automation.py`:
-
-```python
-await main(
-    date="20251003",           # Date in YYYYMMDD format
-    departure_time="200000",   # Time in HHMMSS format (24-hour)
-    number_of_ticket="2",      # Number of tickets to book
-    max_restarts=5             # Maximum restart attempts
-)
-```
-
-## 📁 Project Structure
-
-```
-automate-ticketing/
-├── main.py                 # Core automation logic
-├── run_automation.py       # Enhanced runner with better UX
-├── notification.py         # macOS notification system
-├── send_email.py          # Email notifications via AppleScript
-├── send_imessage.py       # iMessage notifications (optional)
-├── example_usage.py       # Usage examples
-├── email_recipients.json  # Email recipient configuration
-└── pyproject.toml         # Project dependencies
-```
-
-## 🔧 How It Works
-
-1. **Browser Automation**: Uses `browser-use` to control Chrome
-2. **Form Filling**: Automatically fills departure/destination, date, time, and ticket count
-3. **Continuous Search**: Repeatedly searches for available tickets
-4. **Ticket Detection**: Uses XPath to find "예약하기" (Reserve) buttons
-5. **Notifications**: Sends email and macOS notifications when tickets are found
-6. **Error Recovery**: Automatically retries on failures with exponential backoff
-
-## 📧 Notification System
-
-### Email Notifications
-- Uses AppleScript to send emails via Mail app
-- Configure recipients in `email_recipients.json`
-- Supports multiple recipients
-
-### macOS Notifications
-- Uses `terminal-notifier` for system notifications
-- Includes sound alerts
-- Shows ticket availability status
-
-### iMessage Notifications (Optional)
-- Uses AppleScript to send iMessages
-- Supports phone numbers and email addresses
-- Requires Messages app to be configured
-
-## 🛡️ Error Handling
-
-The system includes robust error handling:
-
-- **CDP Error Recovery**: Automatically retries Chrome DevTools Protocol errors
-- **Browser Restart**: Restarts browser when connection issues persist
-- **Progressive Backoff**: Uses increasing delays between retry attempts
-- **Multiple Fallback Methods**: Each form field has multiple ways to be filled
-- **Comprehensive Logging**: All operations logged to `ticket_automation.log`
-
-## 📊 Logging
-
-Logs are written to:
-- `ticket_automation.log` - Detailed operation logs
-- `automation_runner.log` - Runner-specific logs
-- Console output - Real-time status updates
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-1. **Chrome Debugging Not Enabled**
-   ```bash
-   # Start Chrome with debugging
-   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-   ```
-
-2. **Mail App Not Configured**
-   - Open Mail app and set up your email account
-   - Test email sending manually
-
-3. **Terminal Notifier Not Found**
-   ```bash
-   brew install terminal-notifier
-   ```
-
-4. **Browser Connection Issues**
-   - The system will automatically retry and restart
-   - Check Chrome is running with debugging enabled
-   - Ensure port 9222 is available
-
-## 📝 Example Usage
-
-```python
-# Test email notifications
-python send_email.py "recipient@example.com" "Test Subject" "Hello!"
-
-# Test macOS notifications
-python notification.py
-
-# Test iMessage (requires Messages app)
-python send_imessage.py "+1234567890" "Hello from Python!"
-```
-
-## 🔄 Automation Flow
-
-1. **Start**: Launch Chrome with debugging enabled
-2. **Navigate**: Go to SRT booking website
-3. **Fill Form**: Enter departure (수서), destination (동대구), date, time, ticket count
-4. **Search**: Click search button
-5. **Check**: Look for "예약하기" buttons in results
-6. **Notify**: Send email and macOS notifications if tickets found
-7. **Repeat**: Continue searching until tickets are found or stopped
-
-## 📄 License
-
-MIT License - see LICENSE file for details.
+MIT
