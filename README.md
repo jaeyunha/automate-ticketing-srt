@@ -83,6 +83,12 @@ uv run run_automation.py \
   --tickets 2
 ```
 
+### 도착시간 제한 (12시 이전 도착만)
+
+```bash
+uv run run_automation.py --max-arrival 1200
+```
+
 ### 특실 포함
 
 ```bash
@@ -99,6 +105,7 @@ uv run run_automation.py --first-class
 | `--time` | 080000 | 출발시간 (HHMMSS) |
 | `--tickets` | 2 | 예매 매수 |
 | `--first-class` | 꺼짐 | 특실도 검색 |
+| `--max-arrival` | 없음 | 최대 도착시간 (HHMM, 예: 1200) |
 | `--max-restarts` | 5 | 최대 브라우저 재시작 횟수 |
 
 ## 동작 원리

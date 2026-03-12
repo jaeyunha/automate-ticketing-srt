@@ -28,7 +28,8 @@ async def run_automation(args):
     try:
         logging.info("Starting enhanced ticket automation...")
         logging.info(f"Route: {args.departure} -> {args.arrival}")
-        logging.info(f"Date: {args.date}, Time: {args.time}, Tickets: {args.tickets}")
+        logging.info(f"Date: {args.date}, Time: {args.time}, Tickets: {args.tickets}" +
+                     (f", Max arrival: {args.max_arrival}" if args.max_arrival else ""))
 
         await main(
             date=args.date,
@@ -37,6 +38,7 @@ async def run_automation(args):
             departure=args.departure,
             arrival=args.arrival,
             include_first_class=args.first_class,
+            max_arrival=args.max_arrival,
             max_restarts=args.max_restarts,
         )
 
@@ -58,6 +60,7 @@ if __name__ == "__main__":
     parser.add_argument("--time", default="080000", help="Departure time in HHMMSS format (default: 080000)")
     parser.add_argument("--tickets", default="2", help="Number of tickets (default: 2)")
     parser.add_argument("--first-class", action="store_true", help="Also check 특실 (first class) seats")
+    parser.add_argument("--max-arrival", default=None, help="Max arrival time in HHMM format, e.g. 1200 (default: no limit)")
     parser.add_argument("--max-restarts", type=int, default=5, help="Max browser restarts (default: 5)")
     args = parser.parse_args()
 
@@ -68,6 +71,8 @@ if __name__ == "__main__":
     print("🚀 Starting Enhanced Ticket Automation")
     print(f"  Route: {args.departure} → {args.arrival}")
     print(f"  Date: {args.date}, Time: {args.time}, Tickets: {args.tickets}")
+    if args.max_arrival:
+        print(f"  Max arrival: {args.max_arrival[:2]}:{args.max_arrival[2:]}")
     print(f"  Seat types: {seat_types}")
     print("\nPress Ctrl+C to stop the automation\n")
 

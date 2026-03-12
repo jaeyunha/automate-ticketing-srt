@@ -77,14 +77,14 @@ async def safe_page_operation(operation, max_retries=3, delay=2):
             raise e
     raise TicketAutomationError(f"Operation failed after {max_retries} attempts")
 
-async def main(date, departure_time, number_of_ticket, departure="동대구", arrival="수서", include_first_class=False, max_restarts=5):
+async def main(date, departure_time, number_of_ticket, departure="동대구", arrival="수서", include_first_class=False, max_arrival=None, max_restarts=5):
     """Main function with automatic restart capability"""
     restart_count = 0
 
     while restart_count < max_restarts:
         try:
             logging.info(f"Starting ticket automation (attempt {restart_count + 1}/{max_restarts})")
-            await run_ticket_search(date, departure_time, number_of_ticket, departure, arrival, include_first_class)
+            await run_ticket_search(date, departure_time, number_of_ticket, departure, arrival, include_first_class, max_arrival)
             break  # Success, exit the retry loop
             
         except TicketAutomationError as e:
@@ -111,7 +111,7 @@ async def main(date, departure_time, number_of_ticket, departure="동대구", ar
             else:
                 raise
 
-async def run_ticket_search(date, departure_time, number_of_ticket, departure, arrival, include_first_class):
+async def run_ticket_search(date, departure_time, number_of_ticket, departure, arrival, include_first_class, max_arrival=None):
     """Core ticket search logic with error handling"""
     browser = None
     try:
@@ -132,7 +132,7 @@ async def run_ticket_search(date, departure_time, number_of_ticket, departure, a
         await safe_page_operation(lambda: fill_form_fields(page, date, departure_time, number_of_ticket))
 
         # Start the continuous ticket checking loop
-        await continuous_ticket_search(page, date, departure_time, number_of_ticket, departure, arrival, include_first_class)
+        await continuous_ticket_search(page, date, departure_time, number_of_ticket, departure, arrival, include_first_class, max_arrival)
         
     except Exception as e:
         logging.error(f"Error in ticket search: {e}")
@@ -274,7 +274,7 @@ async def handle_session_expiry(page, date, departure_time, number_of_ticket, de
     return True
 
 
-async def continuous_ticket_search(page, date, departure_time, number_of_ticket, departure, arrival, include_first_class):
+async def continuous_ticket_search(page, date, departure_time, number_of_ticket, departure, arrival, include_first_class, max_arrival=None):
     """Continuous ticket checking loop with error handling"""
     attempt = 1
     consecutive_errors = 0
@@ -292,7 +292,7 @@ async def continuous_ticket_search(page, date, departure_time, number_of_ticket,
             await safe_page_operation(lambda: click_search_button(page))
             await asyncio.sleep(3)
 
-            tickets_found = await safe_page_operation(lambda: check_for_tickets(page, include_first_class))
+            tickets_found = await safe_page_operation(lambda: check_for_tickets(page, include_first_class, max_arrival))
 
             if tickets_found:
                 break
@@ -324,76 +324,102 @@ async def click_search_button(page):
     else:
         raise TicketAutomationError("Search button not found")
 
-async def check_for_tickets(page, include_first_class=False):
+async def check_for_tickets(page, include_first_class=False, max_arrival=None):
     """Check for available tickets and handle ticket booking.
 
-    Checks these columns:
+    Checks these columns per row:
       - td[7]: 일반실 (always)
       - td[8]: 예약대기 (always)
       - td[6]: 특실 (only if include_first_class is True)
+
+    If max_arrival is set (e.g. "1200"), skips rows where arrival time > max_arrival.
+    Arrival time is in td[5] as <em class="time">HH:MM</em>.
     """
-    # Build list of columns to check: [column_index, label]
     columns_js = "[7, 8"
     if include_first_class:
         columns_js += ", 6"
     columns_js += "]"
 
+    max_arrival_int = int(max_arrival) if max_arrival else 0
     column_labels = {6: "특실", 7: "일반실", 8: "예약대기"}
 
     try:
-        reservation_found = await page.evaluate(f"""
+        result = await page.evaluate(f"""
             () => {{
                 const columns = {columns_js};
-                const availableLinks = [];
-                for (const col of columns) {{
-                    const xpath = "//*[@id='result-form']//tbody//tr//td[" + col + "]/a";
-                    const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-                    for (let i = 0; i < result.snapshotLength; i++) {{
-                        const link = result.snapshotItem(i);
+                const maxArrival = {max_arrival_int};
+                const rows = document.querySelectorAll('#result-form tbody tr');
+                const available = [];
+                const skipped = [];
+
+                for (const row of rows) {{
+                    const tds = row.querySelectorAll('td');
+                    if (tds.length < 9) continue;
+
+                    // Extract arrival time from td[5] (0-indexed: tds[4])
+                    if (maxArrival > 0) {{
+                        const arrivalEl = tds[4] ? tds[4].querySelector('em.time') : null;
+                        if (arrivalEl) {{
+                            const arrivalTime = parseInt(arrivalEl.textContent.replace(':', ''), 10);
+                            if (arrivalTime > maxArrival) {{
+                                skipped.push(arrivalEl.textContent.trim());
+                                continue;
+                            }}
+                        }}
+                    }}
+
+                    // Check columns in priority order for this row
+                    for (const col of columns) {{
+                        const td = tds[col - 1];
+                        if (!td) continue;
+                        const link = td.querySelector('a');
                         if (link && link.textContent && link.textContent.includes('예약하기')) {{
-                            availableLinks.push({{
-                                text: link.textContent.trim(),
-                                ariaLabel: link.getAttribute('aria-label') || '',
-                                col: col
-                            }});
+                            available.push({{col: col, rowIndex: row.rowIndex}});
                         }}
                     }}
                 }}
-                return availableLinks;
+                return {{available: available, skipped: skipped}};
             }}
         """)
 
         import json
         try:
-            if isinstance(reservation_found, str):
-                reservation_found = json.loads(reservation_found)
+            if isinstance(result, str):
+                result = json.loads(result)
 
-            if len(reservation_found) > 0:
+            skipped = result.get('skipped', [])
+            if skipped:
+                logging.debug(f"Skipped trains arriving at: {', '.join(skipped)} (after {max_arrival[:2]}:{max_arrival[2:]})")
 
-                # Click the first available ticket (priority: 일반실 > 예약대기 > 특실)
+            available = result.get('available', [])
+            if len(available) > 0:
+                # Click the first match (already in priority order: 일반실 > 예약대기 > 특실)
+                target = available[0]
+                target_row = target['rowIndex']
+                target_col = target['col']
+
                 click_result = await page.evaluate(f"""
                     () => {{
-                        const columns = {columns_js};
-                        for (const col of columns) {{
-                            const xpath = "//*[@id='result-form']//tbody//tr//td[" + col + "]/a";
-                            const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-                            for (let i = 0; i < result.snapshotLength; i++) {{
-                                const link = result.snapshotItem(i);
-                                if (link && link.textContent && link.textContent.includes('예약하기')) {{
-                                    link.click();
-                                    return {{clicked: true, col: col}};
+                        const rows = document.querySelectorAll('#result-form tbody tr');
+                        for (const row of rows) {{
+                            if (row.rowIndex === {target_row}) {{
+                                const tds = row.querySelectorAll('td');
+                                const td = tds[{target_col} - 1];
+                                if (td) {{
+                                    const link = td.querySelector('a');
+                                    if (link) {{ link.click(); return true; }}
                                 }}
                             }}
                         }}
-                        return {{clicked: false}};
+                        return false;
                     }}
                 """)
 
                 if isinstance(click_result, str):
                     click_result = json.loads(click_result)
 
-                if click_result.get('clicked'):
-                    col_label = column_labels.get(click_result.get('col'), 'unknown')
+                if click_result:
+                    col_label = column_labels.get(target_col, 'unknown')
                     logging.info(f"🎉 TICKET FOUND! Clicked [{col_label}]")
                     await handle_ticket_found()
                     return True

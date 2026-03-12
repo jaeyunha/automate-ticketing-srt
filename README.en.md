@@ -84,6 +84,12 @@ uv run run_automation.py \
   --tickets 2
 ```
 
+### Filter by Max Arrival Time (only trains arriving by 12:00)
+
+```bash
+uv run run_automation.py --max-arrival 1200
+```
+
 ### Include First Class Seats
 
 ```bash
@@ -100,6 +106,7 @@ uv run run_automation.py --first-class
 | `--time` | 080000 | Departure time (HHMMSS) |
 | `--tickets` | 2 | Number of tickets |
 | `--first-class` | off | Also check 특실 (first class) |
+| `--max-arrival` | none | Max arrival time (HHMM, e.g. 1200) |
 | `--max-restarts` | 5 | Max browser restart attempts |
 
 ## How It Works
