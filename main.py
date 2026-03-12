@@ -1,4 +1,5 @@
 import asyncio
+import random
 import subprocess
 import sys
 from dotenv import load_dotenv
@@ -289,14 +290,20 @@ async def continuous_ticket_search(page, date, departure_time, number_of_ticket,
             if re_logged_in:
                 logging.info("Session restored, resuming search")
 
+            # Random delay before clicking search (0.5–1.5s)
+            await asyncio.sleep(random.uniform(0.5, 1.5))
             await safe_page_operation(lambda: click_search_button(page))
-            await asyncio.sleep(3)
+
+            # Random delay waiting for results (2.5–4s)
+            await asyncio.sleep(random.uniform(2.5, 4.0))
 
             tickets_found = await safe_page_operation(lambda: check_for_tickets(page, include_first_class, max_arrival))
 
             if tickets_found:
                 break
 
+            # Random delay before refilling form (0.3–1.0s)
+            await asyncio.sleep(random.uniform(0.3, 1.0))
             await safe_page_operation(lambda: refill_form_after_search(page, date, departure_time, departure, arrival))
 
             # Log every 10 attempts to avoid spam
@@ -320,6 +327,8 @@ async def click_search_button(page):
     """Click the search button with error handling"""
     search_button = await page.get_elements_by_css_selector("input[type='submit']")
     if search_button:
+        # Small random delay before click (0.1–0.4s) to mimic human timing
+        await asyncio.sleep(random.uniform(0.1, 0.4))
         await search_button[0].click()
     else:
         raise TicketAutomationError("Search button not found")
